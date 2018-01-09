@@ -14,6 +14,8 @@ const unsigned char xts_spc_mod_setmode = 0x20;
 const unsigned char xts_spc_mod_loadapp = 0x21;
 const unsigned char xts_spc_mod_reset = 0x22;
 const unsigned char xts_spc_mod_setledcontrol = 0x24;
+const unsigned char xts_spc_output = 0x41;
+const unsigned char xts_spco_setcontrol = 0x10;
 
 const unsigned char xts_spca_set = 0x10;
 
@@ -34,12 +36,10 @@ const unsigned long xts_id_app_presence = 0x00288912;
 const unsigned long xts_id_app_presence2 = 0x014d4ab8;
 const unsigned long xts_id_resp_status = 0x2375fe26;
 const unsigned long xts_id_sleep_status = 0x2375a16c;
-const unsigned long xts_id_presence_status = 0x991a52be;
-const unsigned long xts_id_presence_single = 0x723bfa1e;
-const unsigned long xts_id_presence_movinglist = 0x723bfa1f;
 
 const unsigned long xts_id_baseband_iq = 0x0000000c;
 const unsigned long xts_id_baseband_amplitude_phase = 0x0000000d;
+const unsigned long xtid_output_control_enable = 1;
 
 const unsigned long xts_sacr_outputbaseband = 0x00000010;
 const unsigned long xts_sacr_id_baseband_output_off = 0x00000000;
@@ -48,12 +48,13 @@ const unsigned long xts_sacr_id_baseband_output_amplitude_phase = 0x00000002;
 const unsigned char xts_sm_run = 0x01;
 const unsigned char xts_sm_normal = 0x10;
 const unsigned char xts_sm_idle = 0x11;
+const unsigned char xts_sm_stop = 0x13;
 
 const unsigned char xts_sprs_booting = 0x10;
 const unsigned char xts_sprs_ready = 0x11;
 
 
-#define BASEBAND_NUM_OF_BINS_MAX 52
+#define BASEBAND_NUM_OF_BINS_MAX 94
 #define RX_BUF_LENGTH 512
 #define TX_BUF_LENGTH 48
 
@@ -88,59 +89,64 @@ void setup (void)
 {
     
   // Setup USB serial for debug communication
-  SerialUSB.begin(921600);
-  while (!SerialUSB);
+  Serial.begin(115200);
+  while (!Serial);
   
   // Setup serial connection to radar (Serial1 is RX/TX pins on Arduino Zero)
   Serial1.begin(115200);
   
   // Change baudrate of radar module 
-  SerialUSB.println("Changing baudrate of module to 921600...");
-  setBaudRate(921600);
+ // Serial.println("Changing baudrate of module to 921600...");
+ // setBaudRate(921600);
 
   // Change baudrate of Arduino's serial communication with radar
-  Serial1.flush ();    // wait for send buffer to empty
-  delay (100);         // let last characters be sent
-  Serial1.end ();      // close serial
+ // Serial1.flush ();    // wait for send buffer to empty
+ // delay (100);         // let last characters be sent
+//  Serial1.end ();      // close serial
 
   // Restart serial with new baud rate
-  Serial1.begin(921600);
+ // Serial1.begin(921600);
   delay(2000);
   
   // Reset module
   empty_serial_buffer();
-  SerialUSB.println("Resetting module...");
+  Serial.println("Resetting module...");
   send_command(&xts_spc_mod_reset, 1);
 
   // Receive system status messages
-  SerialUSB.println("Waiting for system status messages...");
+  Serial.println("Waiting for system status messages...");
   while (!radar_ready()) {
-    SerialUSB.println("Radar not ready, trying another reset...");
+    Serial.println("Radar not ready, trying another reset...");
     empty_serial_buffer();
     send_command(&xts_spc_mod_reset, 1);
   }
   
   // Load module profile - Sleep (provides 2m radar frame length)
-  SerialUSB.println("Loading sleep app...");
-  load_sleep_app();
+  Serial.println("Loading precense app...");
+  //load_sleep_app();
+  stop_app();
+
+  load_presence_app();
+  
 
   // Turn on baseband (raw data) output.
-  SerialUSB.println("Turning on raw data...");
-  enable_raw_data();
+ // Serial.println("Turning on raw data...");
+ // enable_raw_data();
 
   // Set detection zone (0.4 - 2.0 gives radar frame 0.3 - 2.3)
-  SerialUSB.println("Setting detection zone...");
-  setDetectionZone(0.4, 2.0);
+  Serial.println("Setting detection zone...");
+  setDetectionZone(0.4, 4.0);
   
   // Set high sensitivity. 
-  SerialUSB.println("Setting sensitivity...");
-  setSensitivity(9);
-
+  Serial.println("Setting sensitivity...");
+  setSensitivity(5);
+Serial.println("Loading amplitude app...");
+  enable_amplitude_phase();
   // Start the app
-  SerialUSB.println("Starting the app...");  
+  Serial.println("Starting the app...");  
   execute_app();
 
-  SerialUSB.println("Waiting for baseband data...");
+  Serial.println("Waiting for baseband data...");
 }
 
 
@@ -197,7 +203,7 @@ unsigned char serial_read_blocking()
  */
 bool check_overflow() 
 {
-  if (Serial1.available() >= SERIAL_BUFFER_SIZE-1) {
+  if (Serial1.available() >= SERIAL_TX_BUFFER_SIZE-1) {
     return true;
   }
 
@@ -229,7 +235,7 @@ void send_command(const unsigned char * cmd, int len) {
     if (cmd[i] == 0x7D || cmd[i] == 0x7E || cmd[i] == 0x7F)
     {
      //TODO: Implement escaping 
-     SerialUSB.write("CRC Escaping needed for send:buf! Halting...");
+     Serial.write("CRC Escaping needed for send:buf! Halting...");
      while(1) {}
     }
   }
@@ -353,12 +359,12 @@ int receive_data(bool print_data)
 
   // Print the received data
   if (print_data) {
-    SerialUSB.print("Data: ");
+    Serial.print("Data: ");
     for (int i = 0; i < recv_len; i++) {
-      SerialUSB.print(recv_buf[i] ,HEX);
-      SerialUSB.print(" ");
+      Serial.print(recv_buf[i] ,HEX);
+      Serial.print(" ");
     }
-    SerialUSB.println(" ");
+    Serial.println(" ");
   }
 
   
@@ -367,7 +373,7 @@ int receive_data(bool print_data)
     return recv_len;  // Return length of data packet upon success
   }
   else {
-    //SerialUSB.println("[Error]: CRC check failed!");
+    //Serial.println("[Error]: CRC check failed!");
     return -1; // Return -1 upon crc failure
   }
 
@@ -388,12 +394,12 @@ int receive_data(bool print_data)
 void check_ack() 
 {
   if (recv_buf[1] == xts_spr_system) {
-    SerialUSB.println("Last received was XTS_SPR_SYSTEM message, trying new receive...");
+    Serial.println("Last received was XTS_SPR_SYSTEM message, trying new receive...");
     receive_data(true);
   }
   
   if (recv_buf[1] != xts_spr_ack) {
-    SerialUSB.println("ACK not received! Halting...");
+    Serial.println("ACK not received! Halting...");
     while (1) {}
   }  
 }
@@ -436,6 +442,44 @@ void execute_app()
 
 
 /**
+ * Execute application
+ */
+void stop_app() 
+{
+  //Fill send buffer
+  send_buf[0] = xts_spc_mod_setmode;
+  send_buf[1] = xts_sm_stop;
+
+  // Send the command
+  send_command(send_buf, 2);
+  
+  // Get response
+  receive_data(true);
+}
+
+
+/**
+ * Load sleep app
+ */
+void load_presence_app() 
+{
+  //Fill send buffer
+  send_buf[0] = xts_spc_mod_loadapp;
+  memcpy(send_buf+1, &xts_id_app_presence2, 4);
+  
+  //Send the command
+  send_command(send_buf, 5);
+  
+  //Get response
+  receive_data(true);
+  
+  // Check if acknowledge was received
+  check_ack();
+  
+}
+
+
+/**
  * Load sleep app
  */
 void load_sleep_app() 
@@ -453,6 +497,25 @@ void load_sleep_app()
   // Check if acknowledge was received
   check_ack();
   
+}
+
+void enable_amplitude_phase()
+{
+  //Fill send buffer
+  send_buf[0] = xts_spc_output;
+  send_buf[1] = xts_spco_setcontrol;
+
+  memcpy(send_buf+2, &xts_id_baseband_amplitude_phase, 4);
+  memcpy(send_buf+6, &xtid_output_control_enable, 4);
+
+  // Send the command
+  send_command(send_buf, 7);
+  
+  // Get response
+  receive_data(true);
+
+  // Check if acknowledge was received
+  check_ack();
 }
 
 
@@ -567,23 +630,23 @@ void handleProtocolPacket(const unsigned char * data, unsigned int length)
     //Check ID of content
     if (pcontentId == xts_id_resp_status)
     {
-      //SerialUSB.println("Respiration status data");
+      Serial.println("Respiration status data");
       // Todo: Could process complete respiration message here.
     }
     else if (pcontentId == xts_id_sleep_status)
     {
-      //SerialUSB.println("Sleep status data");
+      Serial.println("Sleep status data");
       // Todo: Could process complete sleep message here.
     }
     else if (pcontentId == xts_id_baseband_amplitude_phase) 
     {
-      //SerialUSB.println("Baseband Amplitude Data");
+      Serial.println("Baseband Amplitude Data");
       xtDatamsgBasebandAP_header_t basebandHeader;
       memcpy(&basebandHeader, data+5, sizeof(xtDatamsgBasebandAP_header_t));
       
       if (basebandHeader.numOfBins != 52) {
-        SerialUSB.print("[Error]: numOfBins = ");
-        SerialUSB.println(basebandHeader.numOfBins);
+        Serial.print("[Error]: numOfBins = ");
+        Serial.println(basebandHeader.numOfBins);
       }
       
       memcpy(arrayAmplitude, data+5+sizeof(xtDatamsgBasebandAP_header_t), basebandHeader.numOfBins*sizeof(float));
@@ -591,8 +654,12 @@ void handleProtocolPacket(const unsigned char * data, unsigned int length)
     }
     else
     {
-      //SerialUSB.println("Unknown data");
+      Serial.println(pcontentId);
     }
+  }
+  else
+  {
+    Serial.println(data[0]);
   }
 }
 
@@ -618,7 +685,7 @@ void onDatamsgBasebandAP( xtDatamsgBasebandAP_header_t *basebandHeader , float *
   // Check for strange values
   for (int i = 0; i < basebandHeader->numOfBins; i++) {
     if (abs(arrayAmplitude[i]) > 1000.0) {
-      SerialUSB.println("Suspicious frame. Ignoring...");  
+      Serial.println("Suspicious frame. Ignoring...");  
       return;
     }
   }
@@ -648,18 +715,18 @@ void onDatamsgBasebandAP( xtDatamsgBasebandAP_header_t *basebandHeader , float *
     
     distance = basebandHeader->rangeOffset + index * basebandHeader->binLength;
     distanceFiltered = distanceFiltered*(1-distanceFilterWeight) + distance*distanceFilterWeight;
-    SerialUSB.print("Detection at ");
-    SerialUSB.print((int)distanceFiltered);
-    SerialUSB.print(".");
-    SerialUSB.println((int)( (distanceFiltered - (int)distanceFiltered)*10));
-    // SerialUSB.print(" amplitude: ");
-    // SerialUSB.println(ampMax);
+    Serial.print("Detection at ");
+    Serial.print((int)distanceFiltered);
+    Serial.print(".");
+    Serial.println((int)( (distanceFiltered - (int)distanceFiltered)*10));
+    // Serial.print(" amplitude: ");
+    // Serial.println(ampMax);
   }
   //else if (detectionTimeout++ > 20*5) // 5 seconds
   else if (basebandHeader->frameCtr - last_detection > 100) // 5 seconds
   {
-    SerialUSB.print("No detection. ampMax: ");
-    SerialUSB.println(ampMax);
+    Serial.print("No detection. ampMax: ");
+    Serial.println(ampMax);
   }
 }
 
@@ -694,14 +761,13 @@ int get_max(float * data, int length, float * ampMax)
  */
 void print_data(float * data, int length)
 {
-  SerialUSB.println("Data:");
+  Serial.println("Data:");
 
   for (int i = 0; i < length; i++) {
-    SerialUSB.print(data[i]);
-    SerialUSB.print(", ");
+    Serial.print(data[i]);
+    Serial.print(", ");
   }
 
-  SerialUSB.println(" ");
+  Serial.println(" ");
 }
-
 
