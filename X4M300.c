@@ -509,7 +509,7 @@ void enable_amplitude_phase()
   memcpy(send_buf+6, &xtid_output_control_enable, 4);
 
   // Send the command
-  send_command(send_buf, 7);
+  send_command(send_buf, 10);
   
   // Get response
   receive_data(true);
